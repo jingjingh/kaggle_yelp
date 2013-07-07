@@ -12,66 +12,64 @@ import re
 TRAINING_PATH = '/yelp_training_set/'
 TEST_PATH = '/yelp_test_set/'
 
+TRAINING_DATE = date(2013, 1, 19)
+TEST_DATE = date(2013, 3, 12)
+
 class Review(object):
-    def __init__(
-        self,
-        bizid,
-        uid,
-        stars,
-        text,
-        date,
-        votes,
-        revid
-        ):
-        self.bizid = bizid
-        self.uid = uid
-        self.stars = stars
-        self.text = text
-        self.date = datetime.strptime(date, '%Y-%m-%d')
-        self.votes = votes
-        self.revid = revid
+    # mode for training, !mode for test
+    def __init__(self, rev, mode):
+        self.bizid = rev['business_id']
+        self.uid = rev['user_id']
+        self.stars = rev['stars']
+        self.text = rev['text']
+        self.date = datetime.strptime(rev['date'], '%Y-%m-%d')
+        self.votes = None
+        if 'votes' in rev:
+            self.votes = rev['votes']
+        self.revid = None
+        if 'review_id' in rev:
+            self.revid = rev['review_id']
+        self.mode = mode
+
+    def get_days(self):
+        d = TRAINING_DATE if self.mode else TEST_DATE
+        end = datetime.combine(d, time(0, 0))
+        return abs(self.date - end).days
 
 class Business(object):
-    def __init__(
-        self,
-        bizid,
-        stars,
-        categories,
-        longitude,
-        latitude,
-        reviewCount,
-        ):
-        self.bizid = bizid
-        self.stars = stars
-        self.categories = categories
-        self.longitude = longitude
-        self.latitude = latitude
-        self.reviewCount = reviewCount
+    def __init__(self, bus):
+        self.bizid = bus['business_id']
+        self.stars = bus['stars']
+        self.categories = bus['categories']
+        self.longitude = bus['longitude']
+        self.latitude = bus['latitude']
+        self.reviewCount = bus['review_count'] 
 
 class User(object):
-    def __init__(
-        self,
-        uid,
-        stars,
-        reviewCount,
-        votes,
-        ):
-        self.uid = uid
-        self.stars = stars
-        self.votes = votes
-        self.reviewCount = reviewCount
+    # mode for training, !mode for test
+    def __init__(self, user, mode):
+        self.uid = user['user_id']
+        self.stars = user['average_stars']
+        self.reviewCount = user['review_count']
+        self.votes = None
+        if 'votes' in user:
+            self.votes = user['votes']
+        self.mode = mode
 
-    def VPR(self):
-        return self.votes['useful'] / self.reviewCount
+    def get_vpr(self):
+        if self.mode:
+            return self.votes['useful'] / self.reviewCount
+        else:
+            return None
 
-def lookUpBiz(bizid):
-    if bizid in BizMap:
-        return BizMap[bizid]
+def find_business(bid):
+    if bid in business_map:
+        return business_map[bid]
     return None
 
-def lookUpUser(uid):
-    if uid in UserMap:
-        return UserMap[uid]
+def find_user(uid):
+    if uid in user_map:
+        return user_map[uid]
     return None
 
 def read_file(file):
@@ -88,33 +86,22 @@ def read_training_file(file):
 def read_test_file(file):
     return read_file(TEST_PATH + file)
 
-d = date(2013, 1, 19)
-t = time(0, 0)
-measuredDate = datetime.combine(d, t)
+business_map = {}
+for b in read_training_file('yelp_training_set_business.json'):
+    business = Business(b)
+    business_map[business.bizid] = business
 
+user_map = {}
+for u in read_training_file('yelp_training_set_user.json'):
+    user = User(u, True)
+    user_map[user.uid] = user
 
-BizMap = {}
-for bb in read_training_file('yelp_training_set_business.json'):
-    b = Business(bb['business_id'], bb['stars'], bb['categories'],
-        bb['longitude'], bb['latitude'], bb['review_count'])
-    BizMap[b.bizid] = b
+reviews = [Review(r, True) for r in read_training_file('yelp_training_set_review.json')]
 
-UserMap = {}
-for bb in read_training_file('yelp_training_set_user.json'):
-    b = User(bb['user_id'], bb['average_stars'], bb['review_count'],
-             bb['votes'])
-    UserMap[b.uid] = b
-
-Reviews = []
-for rev in read_training_file('yelp_training_set_review.json'):
-    r = Review(rev['business_id'], rev['user_id'], rev['stars'],
-        rev['text'], rev['date'], rev['votes'], None)
-    Reviews.append(r)
-
-vallim = [len(Reviews), 0, 0]
+vallim = [len(reviews), 0, 0]
 allInput = []
-for rev in Reviews:
-    thisBiz = lookUpBiz(rev.bizid)
+for rev in reviews:
+    this_business = find_business(rev.bizid)
     excount = 0
     for sent in sent_tokenize(rev.text):
         ss = sent.strip()
@@ -122,34 +109,34 @@ for rev in Reviews:
             excount += 1
     if len(rev.text) == 0:
         allInput.append([
-            thisBiz.stars,
+            this_business.stars,
             len(rev.text),
             rev.stars,
-            abs(rev.date - measuredDate).days,
+            rev.get_days(),
             0,
             0,
             0,
             0,
             0,
-            thisBiz.longitude,
-            thisBiz.latitude,
+            this_business.longitude,
+            this_business.latitude,
             ])
     else:
         allInput.append([
-            thisBiz.stars,
+            this_business.stars,
             len(rev.text),
             rev.stars,
-            abs(rev.date - measuredDate).days,
+            rev.get_days(),
             excount,
             np.mean([len(sent) for sent in sent_tokenize(rev.text)]),
             len(sent_tokenize(rev.text)),
             len(re.findall('\n\n', rev.text)) + 1,
             len(rev.text.splitlines()[0]),
-            thisBiz.longitude,
-            thisBiz.latitude,
+            this_business.longitude,
+            this_business.latitude,
             ])
 
-allUseful = [[rev.votes['useful']] for rev in Reviews]
+allUseful = [[rev.votes['useful']] for rev in reviews]
 MM = matrix(allInput)
 bizLR = (MM.T * MM).I * MM.T
 bizw = bizLR * matrix(allUseful)
@@ -159,16 +146,16 @@ bizwarray = [bizw[i, 0] for i in range(len(bizw))]
 ## biz stars, user rc, len(text), stars, days old
 
 def inputfactx(rev, include_vpr):
-    thisBiz = lookUpBiz(rev.bizid)
-    thisUser = lookUpUser(rev.uid)
-    result = [ thisBiz.stars ]
+    this_business = find_business(rev.bizid)
+    this_user = find_user(rev.uid)
+    result = [ this_business.stars ]
     if include_vpr:
-        result += [ thisUser.VPR() ]
+        result += [ this_user.get_vpr() ]
     result += [
-        thisUser.reviewCount,
+        this_user.reviewCount,
         len(rev.text),
         rev.stars,
-        abs(rev.date - measuredDate).days ]
+        rev.get_days() ]
     if len(rev.text) == 0:
         result += [ 0, 0, 0, 0, 0 ]
     else:
@@ -182,7 +169,7 @@ def inputfactx(rev, include_vpr):
         len(sent_tokenize(rev.text)),
         len(re.findall('\n\n', rev.text)) + 1,
         len(rev.text.splitlines()[0]) ]
-    result += [ thisBiz.longitude, thisBiz.latitude ]
+    result += [ this_business.longitude, this_business.latitude ]
     return result
 
 def inputfact(rev):
@@ -197,15 +184,15 @@ inputFactor3 = []
 inputFactor2 = []
 selectedRevList3 = []
 selectedRevList2 = []
-for rev in Reviews:
-    if rev.votes['useful'] < 6 and abs(rev.date - measuredDate).days < 1800 and len(rev.text) < 1930:
+for rev in reviews:
+    if rev.votes['useful'] < 6 and rev.get_days() < 1800 and len(rev.text) < 1930:
         tempval += 1
-        thisBiz = lookUpBiz(rev.bizid)
-        thisUser = lookUpUser(rev.uid)
-        if thisBiz is not None and thisUser is not None and thisUser.reviewCount < 513:
+        this_business = find_business(rev.bizid)
+        this_user = find_user(rev.uid)
+        if this_business is not None and this_user is not None and this_user.reviewCount < 513:
             selectedRevList2.append(rev)
             inputFactor2.append(inputfact2(rev))
-            if thisUser.VPR() < 6:
+            if this_user.get_vpr() < 6:
                 inputFactor3.append(inputfact(rev))
                 selectedRevList3.append(rev)
     if count == vallim[0] - 1:
@@ -227,45 +214,15 @@ warray2 = [w2[i, 0] for i in range(len(w2))]
 
 ##### test #####
 
-for bb in read_test_file('yelp_test_set_business.json'):
-    b = Business(
-        bb['business_id'],
-        bb['stars'],
-        bb['categories'],
-        bb['longitude'],
-        bb['latitude'],
-        bb['review_count'],
-        )
-    BizMap[b.bizid] = b
+for b in read_test_file('yelp_test_set_business.json'):
+    business = Business(b)
+    business_map[business.bizid] = business
 
-for bb in read_test_file('yelp_test_set_user.json'):
-    b = User(bb['user_id'], bb['average_stars'], bb['review_count'], None)
-    if b.uid not in UserMap.keys():
-        UserMap[b.uid] = b
+for u in read_test_file('yelp_test_set_user.json'):
+    user = User(u, False)
+    if user.uid not in user_map.keys():
+        user_map[user.uid] = user
 
-testReviews = []
-for rev in read_test_file('yelp_test_set_review.json'):
-    testReviews.append(Review(
-        rev['business_id'],
-        rev['user_id'],
-        rev['stars'],
-        rev['text'],
-        rev['date'],
-        None,
-        rev['review_id'],
-        ))
-
-def checkUserVotes(uid):
-    try:
-        return UserMap[uid].VPR()
-    except TypeError:
-        return None
-    except AttributeError:
-        return None
-
-d = date(2013, 3, 12)
-t = time(0, 0)
-measuredDate = datetime.combine(d, t)
 
 collabel = [['id', 'votes']]
 resultFile = open('yelpprediction24.csv', 'wb')
@@ -274,11 +231,12 @@ wr.writerows(collabel)
 
 count = 0
 err = 0
-for rev in testReviews:
-    thisBiz = lookUpBiz(rev.bizid)
-    thisUser = lookUpUser(rev.uid)
-    if thisUser is not None:
-        if checkUserVotes(thisUser.uid) is not None:
+test_reviews = [Review(rev, False) for rev in read_test_file('yelp_test_set_review.json')]
+for rev in test_reviews:
+    this_business = find_business(rev.bizid)
+    this_user = find_user(rev.uid)
+    if this_user is not None:
+        if this_user.get_vpr() is not None:
             dotprod = np.dot(warray, inputfact(rev))
         else:
             dotprod = np.dot(warray2, inputfact2(rev))
@@ -290,37 +248,35 @@ for rev in testReviews:
                 excount += 1
         if len(rev.text) == 0:
             dotprod = np.dot(bizwarray, [
-                thisBiz.stars,
+                this_business.stars,
                 len(rev.text),
                 rev.stars,
-                abs(rev.date - measuredDate).days,
+                rev.get_days(),
                 0,
                 0,
                 0,
                 0,
                 0,
-                thisBiz.longitude,
-                thisBiz.latitude,
+                this_business.longitude,
+                this_business.latitude,
                 ])
         else:
             dotprod = np.dot(bizwarray, [
-                thisBiz.stars,
+                this_business.stars,
                 len(rev.text),
                 rev.stars,
-                abs(rev.date - measuredDate).days,
+                rev.get_days(),
                 excount,
-                np.mean([len(sent) for sent in
-                        sent_tokenize(rev.text)]),
+                np.mean([len(sent) for sent in sent_tokenize(rev.text)]),
                 len(sent_tokenize(rev.text)),
                 len(re.findall('\n\n', rev.text)) + 1,
                 len(rev.text.splitlines()[0]),
-                thisBiz.longitude,
-                thisBiz.latitude,
+                this_business.longitude,
+                this_business.latitude,
                 ])
     if dotprod < 0:
         dotprod = float(0)
-    RESULTS = [[rev.revid, dotprod]]
-    wr.writerows(RESULTS)
+    wr.writerows([[rev.revid, dotprod]])
     count += 1
 
 resultFile.close()
